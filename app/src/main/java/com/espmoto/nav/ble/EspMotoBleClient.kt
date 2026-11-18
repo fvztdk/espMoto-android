@@ -21,6 +21,7 @@ import android.os.ParcelUuid
 import com.espmoto.nav.BuildConfig
 import com.espmoto.nav.obd.BikeProfile
 import com.espmoto.nav.obd.ObdConfigStore
+import com.espmoto.nav.service.HelmetAudioAlerts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -90,7 +91,9 @@ object EspMotoBleClient {
     }
 
     fun refreshPairing(context: Context) {
-        _pairedDevice.value = PairingStore.load(context.applicationContext)
+        val ctx = context.applicationContext
+        HelmetAudioAlerts.load(ctx)
+        _pairedDevice.value = PairingStore.load(ctx)
     }
 
     fun pairWithQrPayload(context: Context, rawQr: String): Result<PairedDevice> {
@@ -116,6 +119,7 @@ object EspMotoBleClient {
     fun connect(context: Context) {
         val ctx = context.applicationContext
         appContext = ctx
+        HelmetAudioAlerts.load(ctx)
         userRequestedDisconnect = false
         cancelPendingReconnect()
         if (_pairedDevice.value == null) {
@@ -396,6 +400,7 @@ object EspMotoBleClient {
                     g.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                val wasConnected = _state.value == ConnectionState.CONNECTED
                 g.close()
                 if (gatt === g) {
                     gatt = null
@@ -404,6 +409,10 @@ object EspMotoBleClient {
                 obdConfigChar = null
                 pairChar = null
                 negotiatedMtu = 23
+
+                if (wasConnected && !userRequestedDisconnect) {
+                    HelmetAudioAlerts.playBleDisconnectedUnexpectedly()
+                }
 
                 val ctx = appContext
                 val dev = lastDevice
@@ -489,6 +498,7 @@ object EspMotoBleClient {
 
                 _state.value = ConnectionState.CONNECTED
                 _statusMessage.value = "Connected to ${g.device.name ?: BleProtocol.DEVICE_NAME}"
+                HelmetAudioAlerts.playBleConnected()
                 _lastPacket.value?.let { sendNavPacket(it) }
                 appContext?.let { ctx ->
                     sendObdConfig(ObdConfigStore.load(ctx))
@@ -509,6 +519,7 @@ object EspMotoBleClient {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
                     _state.value = ConnectionState.CONNECTED
                     _statusMessage.value = "Paired & connected to ${g.device.name ?: BleProtocol.DEVICE_NAME}"
+                    HelmetAudioAlerts.playBleConnected()
                     _lastPacket.value?.let { sendNavPacket(it) }
                     appContext?.let { ctx ->
                         sendObdConfig(ObdConfigStore.load(ctx))
