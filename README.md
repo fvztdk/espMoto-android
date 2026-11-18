@@ -37,3 +37,12 @@ cp .env.example .env
    ./gradlew assembleDebug
    ```
    Output APK: `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Disclaimer
+This is a **hobbyist project** created for personal experimentation and educational purposes:
+- **Local Laws:** You are responsible for checking and complying with your local traffic and vehicle regulations regarding motorcycle navigation and handlebar-mounted displays.
+- **OBD-II & Vehicle Risk:** Configuring custom OBD-II / UDS PIDs or connecting an ELM327 adapter to your motorcycle's diagnostic port is done entirely at your own risk. You are solely responsible for any electrical, ECU, or mechanical damage to your motorcycle.
+
+## License
+Licensed under the [MIT License](LICENSE).
+
