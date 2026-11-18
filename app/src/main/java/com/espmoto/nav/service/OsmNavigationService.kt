@@ -30,6 +30,7 @@ import com.espmoto.nav.osm.GeoCoord
 import com.espmoto.nav.osm.NominatimPlace
 import com.espmoto.nav.osm.OsmApiClient
 import com.espmoto.nav.osm.OsmRoute
+import com.espmoto.nav.osm.RouteStep
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -65,10 +66,14 @@ object NavigationController {
     private var offRouteCounter = 0
 
     @Volatile
+    private var lastSpeedMps: Double = 0.0
+
+    @Volatile
     private var appContextRef: Context? = null
 
     fun refreshLastKnownLocation(context: Context) {
         appContextRef = context.applicationContext
+        HelmetAudioAlerts.load(context)
         if (!hasLocationPermission(context)) return
 
         val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return
@@ -165,6 +170,7 @@ object NavigationController {
                 errorMessage = err.message ?: "Route calculation failed"
             )
         }.onSuccess { route ->
+            HelmetAudioAlerts.resetStepTracking()
             val initialPacket = buildPacketForStep(route, 0, origin, useSegmentDistance = true)
             _uiState.value = _uiState.value.copy(
                 isSearching = false,
@@ -188,6 +194,8 @@ object NavigationController {
 
         val appCtx = context.applicationContext
         appContextRef = appCtx
+        HelmetAudioAlerts.load(appCtx)
+        HelmetAudioAlerts.resetStepTracking()
         stopSimulationOnly()
         offRouteCounter = 0
 
@@ -215,8 +223,11 @@ object NavigationController {
         val appCtx = context?.applicationContext ?: appContextRef
         if (appCtx != null) {
             appContextRef = appCtx
+            HelmetAudioAlerts.load(appCtx)
         }
 
+        lastSpeedMps = 0.0
+        HelmetAudioAlerts.resetStepTracking()
         stopGpsNavigationOnly(stopService = false)
         stopSimulationOnly()
 
@@ -241,16 +252,20 @@ object NavigationController {
                 val currentSeg = route.currentSegment(segIdx)
                 val targetStep = route.upcomingStepForSegment(segIdx) ?: break
                 val segDist = (currentSeg?.distanceMeters ?: 100.0).coerceAtLeast(15.0)
-                val fractions = if (segDist < 40.0) listOf(1.0, 0.3) else listOf(1.0, 0.5, 0.15)
+                val sampleDistances = if (segDist < 40.0) {
+                    listOf(segDist, (segDist * 0.3).coerceAtMost(20.0))
+                } else {
+                    listOf(segDist, segDist * 0.45, (segDist * 0.15).coerceAtMost(55.0))
+                }
 
-                for (frac in fractions) {
+                for (remainingSegDist in sampleDistances) {
                     if (!isActive) break
-                    val remainingSegDist = segDist * frac
+                    val progress = (1.0 - (remainingSegDist / segDist)).coerceIn(0.0, 1.0)
                     val pos = interpolateSegmentPosition(
                         start = currentSeg?.maneuverLocation ?: route.origin,
                         end = targetStep.maneuverLocation,
                         geometry = currentSeg?.geometry.orEmpty(),
-                        progress = (1.0 - frac).coerceIn(0.0, 1.0)
+                        progress = progress
                     )
                     val remDuration = route.remainingDurationSeconds(segIdx, remainingSegDist)
                     val packet = NavPacket(
@@ -264,6 +279,14 @@ object NavigationController {
                         activeStepIndex = segIdx,
                         currentLocation = pos,
                         currentPacket = packet
+                    )
+                    HelmetAudioAlerts.evaluateTurnDistance(
+                        routeId = System.identityHashCode(route),
+                        stepIndex = segIdx,
+                        maneuver = targetStep.maneuver,
+                        distMeters = remainingSegDist,
+                        segmentTotalMeters = segDist,
+                        speedMps = effectiveSpeedMps(currentSeg)
                     )
                     EspMotoBleClient.sendNavPacket(packet)
                     appContextRef?.let { OsmNavigationService.updateNotification(it, packet) }
@@ -295,12 +318,14 @@ object NavigationController {
         val route = _uiState.value.route ?: return
         val maxSegment = (route.segmentCount() - 1).coerceAtLeast(0)
         val next = (_uiState.value.activeStepIndex + 1).coerceAtMost(maxSegment)
+        HelmetAudioAlerts.resetStepTracking()
         _uiState.value = _uiState.value.copy(activeStepIndex = next)
         sendCurrentStepPacket(useSegmentDistance = true)
     }
 
     fun prevStep() {
         val next = (_uiState.value.activeStepIndex - 1).coerceAtLeast(0)
+        HelmetAudioAlerts.resetStepTracking()
         _uiState.value = _uiState.value.copy(activeStepIndex = next)
         sendCurrentStepPacket(useSegmentDistance = true)
     }
@@ -308,6 +333,7 @@ object NavigationController {
     fun stopNavigation(context: Context? = appContextRef) {
         stopSimulationOnly()
         stopGpsNavigationOnly(stopService = true, context = context)
+        HelmetAudioAlerts.resetStepTracking()
 
         val endPacket = NavPacket(
             active = false,
@@ -327,6 +353,7 @@ object NavigationController {
     fun cancelRoute(context: Context? = appContextRef) {
         stopSimulationOnly()
         stopGpsNavigationOnly(stopService = true, context = context)
+        HelmetAudioAlerts.resetStepTracking()
 
         val resetPacket = NavPacket(
             active = false,
@@ -360,6 +387,10 @@ object NavigationController {
             return
         }
 
+        if (location.hasSpeed() && location.speed > 0f) {
+            lastSpeedMps = location.speed.toDouble()
+        }
+
         var stepIdx = state.activeStepIndex.coerceIn(0, (route.steps.lastIndex).coerceAtLeast(0))
         val targetStep = route.upcomingStepForSegment(stepIdx)
         if (targetStep != null) {
@@ -370,7 +401,8 @@ object NavigationController {
             }
         }
 
-        val currentSegDist = route.currentSegment(stepIdx)?.distanceToGeometryMeters(coord) ?: Double.MAX_VALUE
+        val currentSeg = route.currentSegment(stepIdx)
+        val currentSegDist = currentSeg?.distanceToGeometryMeters(coord) ?: Double.MAX_VALUE
         val minRouteDist = if (currentSegDist <= 85.0) currentSegDist else route.minDistanceToRouteMeters(coord)
         if (minRouteDist > 85.0) {
             offRouteCounter += 1
@@ -382,6 +414,19 @@ object NavigationController {
             offRouteCounter = 0
         }
 
+        val upcoming = route.upcomingStepForSegment(stepIdx)
+        if (upcoming != null) {
+            val distToUpcoming = coord.distanceToMeters(upcoming.maneuverLocation)
+            HelmetAudioAlerts.evaluateTurnDistance(
+                routeId = System.identityHashCode(route),
+                stepIndex = stepIdx,
+                maneuver = upcoming.maneuver,
+                distMeters = distToUpcoming,
+                segmentTotalMeters = currentSeg?.distanceMeters ?: distToUpcoming,
+                speedMps = effectiveSpeedMps(currentSeg)
+            )
+        }
+
         _uiState.value = _uiState.value.copy(
             currentLocation = coord,
             hasGpsFix = true,
@@ -390,10 +435,20 @@ object NavigationController {
         sendCurrentStepPacket(useSegmentDistance = false)
     }
 
+    private fun effectiveSpeedMps(segment: RouteStep?): Double {
+        if (lastSpeedMps > 0.5) return lastSpeedMps
+        if (segment != null && segment.durationSeconds > 1.0 && segment.distanceMeters > 1.0) {
+            return (segment.distanceMeters / segment.durationSeconds).coerceIn(5.0, 38.0)
+        }
+        return 11.0
+    }
+
     private fun triggerReroute(from: GeoCoord, oldRoute: OsmRoute) {
+        HelmetAudioAlerts.playOffRouteRerouting()
         rerouteJob = scope.launch {
             OsmApiClient.fetchRoute(from, oldRoute.destination, oldRoute.destinationName)
                 .onSuccess { newRoute ->
+                    HelmetAudioAlerts.resetStepTracking()
                     _uiState.value = _uiState.value.copy(
                         route = newRoute,
                         activeStepIndex = 0,
@@ -614,6 +669,7 @@ class OsmNavigationService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        HelmetAudioAlerts.load(this)
         when (intent?.action) {
             ACTION_CANCEL_ROUTE -> {
                 NavigationController.cancelRoute(this)

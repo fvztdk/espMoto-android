@@ -76,9 +76,11 @@ import com.espmoto.nav.ble.ManeuverType
 import com.espmoto.nav.ble.NavFormatter
 import com.espmoto.nav.ble.PairedDevice
 import com.espmoto.nav.obd.ObdConfigStore
+import com.espmoto.nav.service.HelmetAudioAlerts
 import com.espmoto.nav.service.NavigationController
 import com.espmoto.nav.ui.ObdConfigScreen
 import com.espmoto.nav.ui.OsmMapView
+import com.espmoto.nav.ui.PreferencesScreen
 import com.espmoto.nav.ui.QrScannerDialog
 
 private val BgDark = Color(0xFF0D0F14)
@@ -156,14 +158,16 @@ private fun EspMotoNavScreen() {
     val pairedDevice by EspMotoBleClient.pairedDevice.collectAsState()
     val navState by NavigationController.uiState.collectAsState()
     val obdProfile by ObdConfigStore.profile.collectAsState()
+    val soundWarningsEnabled by HelmetAudioAlerts.soundEnabled.collectAsState()
 
-    var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = Nav, 1 = OBD Config
+    var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = Nav, 1 = OBD Config, 2 = Preferences
     var addressQuery by rememberSaveable { mutableStateOf("") }
     var showPlacesList by rememberSaveable { mutableStateOf(false) }
     var showQrScanner by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         ObdConfigStore.load(context)
+        HelmetAudioAlerts.load(context)
         EspMotoBleClient.refreshPairing(context)
     }
 
@@ -322,12 +326,12 @@ private fun EspMotoNavScreen() {
                 }
             }
 
-            // Mode Switcher Tabs: Navigation vs OBD Config
+            // Mode Switcher Tabs: Navigation vs OBD Config vs Preferences
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("Navigation", "OBD Config").forEachIndexed { idx, title ->
+                listOf("Navigation", "OBD Config", "Preferences").forEachIndexed { idx, title ->
                     val active = selectedTab == idx
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -358,6 +362,16 @@ private fun EspMotoNavScreen() {
                     bleConnected = connState == EspMotoBleClient.ConnectionState.CONNECTED,
                     simMirrorEnabled = simMirrorEnabled,
                     onProfileChange = { /* StateFlow updated in ObdConfigStore */ }
+                )
+            } else if (selectedTab == 2) {
+                PreferencesScreen(
+                    soundWarningsEnabled = soundWarningsEnabled,
+                    onToggleSoundWarnings = { enabled ->
+                        HelmetAudioAlerts.setEnabled(context, enabled, playPreview = enabled)
+                    },
+                    onTestSound = {
+                        HelmetAudioAlerts.playTestSound(context)
+                    }
                 )
             } else {
                 // Section 2: Address Input & Route Search
