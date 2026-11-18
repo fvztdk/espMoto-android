@@ -2,6 +2,16 @@
 
 Kotlin + Jetpack Compose companion application for **espMoto** (M5Stack StopWatch C152 handlebar display). Provides self-contained OpenStreetMap turn-by-turn navigation, QR-based BLE pairing, and live OBD-II / ELM327 profile configuration over Bluetooth Low Energy.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="espMoto Android Demo" width="260" />
+</p>
+
+## Screenshots
+
+| OpenStreetMap Navigation | OBD-II / ELM327 Configurator | QR Code BLE Pairing |
+| :---: | :---: | :---: |
+| <img src="docs/nav-screen.png" alt="Navigation Screen" width="220" /> | <img src="docs/obd-config-screen.png" alt="OBD Config Screen" width="220" /> | <img src="docs/qr-pairing-screen.png" alt="QR Pairing Screen" width="220" /> |
+
 ## Features
 - **OpenStreetMap Search & Routing:** Geocodes destination addresses via public Nominatim, computes driving routes via OSRM, and previews routes on interactive `osmdroid` map tiles.
 - **Share Intent Integration:** Accepts `geo:` URIs and shared Google Maps / location links directly from other apps (`ACTION_SEND`, `ACTION_VIEW`).
