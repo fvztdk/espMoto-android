@@ -1,0 +1,68 @@
+import java.util.Properties
+
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+}
+
+val dotEnv = Properties().apply {
+    val candidates = listOf(rootProject.file(".env"), rootProject.file("../.env"))
+    val envFile = candidates.firstOrNull { it.isFile }
+    envFile?.inputStream()?.use { load(it) }
+}
+val simHost = (dotEnv.getProperty("SIMULATOR_HOST") ?: "localhost").trim()
+val simPort = (dotEnv.getProperty("SIMULATOR_PORT") ?: "8152").trim()
+
+android {
+    namespace = "com.espmoto.nav"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.espmoto.nav"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "SIMULATOR_HOST", "\"$simHost:$simPort\"")
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation(platform("androidx.compose:compose-bom:2024.11.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+
+    // CameraX + ML Kit Barcode Scanning for QR pairing
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
+}
