@@ -1,5 +1,6 @@
 package com.espmoto.nav.ble
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -14,10 +15,12 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import androidx.core.content.ContextCompat
 import com.espmoto.nav.BuildConfig
 import com.espmoto.nav.obd.BikeProfile
 import com.espmoto.nav.obd.ObdConfigStore
@@ -96,14 +99,36 @@ object EspMotoBleClient {
         _pairedDevice.value = PairingStore.load(ctx)
     }
 
+    fun hasBlePermissions(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     fun pairWithQrPayload(context: Context, rawQr: String): Result<PairedDevice> {
         val parsed = PairingStore.parsePairingUri(rawQr)
             ?: return Result.failure(IllegalArgumentException("Invalid espMoto QR code"))
         val ctx = context.applicationContext
         PairingStore.save(ctx, parsed)
         _pairedDevice.value = parsed
-        _statusMessage.value = "QR paired (${parsed.mac}) — connecting..."
-        connect(ctx)
+        if (hasBlePermissions(ctx)) {
+            _statusMessage.value = "QR paired (${parsed.mac}) — connecting..."
+            connect(ctx)
+        } else {
+            _statusMessage.value = "QR paired (${parsed.mac}) — grant Bluetooth permission to connect"
+        }
         return Result.success(parsed)
     }
 
@@ -124,6 +149,12 @@ object EspMotoBleClient {
         cancelPendingReconnect()
         if (_pairedDevice.value == null) {
             _pairedDevice.value = PairingStore.load(ctx)
+        }
+
+        if (!hasBlePermissions(ctx)) {
+            _state.value = ConnectionState.DISCONNECTED
+            _statusMessage.value = "Bluetooth permission required"
+            return
         }
 
         val manager = ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
@@ -162,12 +193,17 @@ object EspMotoBleClient {
                 lastDevice = remote
                 _state.value = ConnectionState.CONNECTING
                 _statusMessage.value = "Connecting to ${paired.name} (${paired.mac})..."
-                gatt = remote.connectGatt(
-                    ctx,
-                    false,
-                    gattCallback,
-                    BluetoothDevice.TRANSPORT_LE
-                )
+                try {
+                    gatt = remote.connectGatt(
+                        ctx,
+                        false,
+                        gattCallback,
+                        BluetoothDevice.TRANSPORT_LE
+                    )
+                } catch (_: SecurityException) {
+                    _state.value = ConnectionState.DISCONNECTED
+                    _statusMessage.value = "Bluetooth permission required"
+                }
                 return
             }
         }

@@ -285,7 +285,7 @@ private fun EspMotoNavScreen() {
                     onQrScanned = { rawQr ->
                         showQrScanner = false
                         val res = EspMotoBleClient.pairWithQrPayload(context, rawQr)
-                        if (res.isSuccess) {
+                        if (res.isSuccess && !EspMotoBleClient.hasBlePermissions(context)) {
                             val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                                 arrayOf(
                                     Manifest.permission.BLUETOOTH_SCAN,
