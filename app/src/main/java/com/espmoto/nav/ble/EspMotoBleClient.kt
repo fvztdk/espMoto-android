@@ -21,7 +21,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
-import com.espmoto.nav.BuildConfig
 import com.espmoto.nav.obd.BikeProfile
 import com.espmoto.nav.obd.ObdConfigStore
 import com.espmoto.nav.service.HelmetAudioAlerts
@@ -31,10 +30,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import org.json.JSONObject
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 
 object EspMotoBleClient {
     enum class ConnectionState { DISCONNECTED, SCANNING, CONNECTING, CONNECTED }
@@ -53,12 +48,6 @@ object EspMotoBleClient {
     private val _lastPacket = MutableStateFlow<NavPacket?>(null)
     val lastPacket: StateFlow<NavPacket?> = _lastPacket
 
-    private val _simulatorMirrorEnabled = MutableStateFlow(false)
-    val simulatorMirrorEnabled: StateFlow<Boolean> = _simulatorMirrorEnabled
-
-    private val _simulatorHost = MutableStateFlow(BuildConfig.SIMULATOR_HOST)
-    val simulatorHost: StateFlow<String> = _simulatorHost
-
     private val _pairedDevice = MutableStateFlow<PairedDevice?>(null)
     val pairedDevice: StateFlow<PairedDevice?> = _pairedDevice
 
@@ -75,23 +64,6 @@ object EspMotoBleClient {
     private var appContext: Context? = null
     private var lastDevice: BluetoothDevice? = null
     private var userRequestedDisconnect = false
-
-    fun setSimulatorMirrorEnabled(enabled: Boolean) {
-        _simulatorMirrorEnabled.value = enabled
-        _lastPacket.value?.let { pkt ->
-            if (enabled) mirrorToSimulator(pkt)
-        }
-    }
-
-    fun setSimulatorHost(host: String) {
-        val cleaned = host.trim()
-            .removePrefix("http://")
-            .removePrefix("https://")
-            .trimEnd('/')
-        if (cleaned.isNotEmpty()) {
-            _simulatorHost.value = cleaned
-        }
-    }
 
     fun refreshPairing(context: Context) {
         val ctx = context.applicationContext
@@ -309,10 +281,6 @@ object EspMotoBleClient {
     fun sendNavPacket(packet: NavPacket) {
         _lastPacket.value = packet
 
-        if (_simulatorMirrorEnabled.value) {
-            mirrorToSimulator(packet)
-        }
-
         val currentGatt = gatt ?: return
         val char = navChar ?: return
         val bytes = packet.encode()
@@ -335,9 +303,6 @@ object EspMotoBleClient {
     @SuppressLint("MissingPermission")
     fun sendObdConfig(profile: BikeProfile): Boolean {
         val wireJson = profile.toWireJson()
-        if (_simulatorMirrorEnabled.value) {
-            mirrorObdConfigToSimulator(wireJson)
-        }
 
         val currentGatt = gatt ?: return false
         val char = obdConfigChar ?: return false
@@ -370,59 +335,6 @@ object EspMotoBleClient {
             }
         }
         return true
-    }
-
-    private fun mirrorObdConfigToSimulator(wireJson: String) {
-        val host = _simulatorHost.value
-        scope.launch {
-            var conn: HttpURLConnection? = null
-            try {
-                val url = URL("http://$host/api/state")
-                conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 2000
-                    readTimeout = 2000
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                }
-                val body = JSONObject().put("obdConfigJson", wireJson).toString()
-                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-                    writer.write(body)
-                    writer.flush()
-                }
-                conn.responseCode
-            } catch (_: Exception) {
-            } finally {
-                conn?.disconnect()
-            }
-        }
-    }
-
-    private fun mirrorToSimulator(packet: NavPacket) {
-        val host = _simulatorHost.value
-        val payload = packet.encodeString()
-        scope.launch {
-            var conn: HttpURLConnection? = null
-            try {
-                val url = URL("http://$host/api/state")
-                conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    connectTimeout = 2000
-                    readTimeout = 2000
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                }
-                val body = JSONObject().put("blePayload", payload).toString()
-                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-                    writer.write(body)
-                    writer.flush()
-                }
-                conn.responseCode
-            } catch (_: Exception) {
-            } finally {
-                conn?.disconnect()
-            }
-        }
     }
 
     private val gattCallback = object : BluetoothGattCallback() {

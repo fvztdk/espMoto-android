@@ -18,17 +18,7 @@ Kotlin + Jetpack Compose companion application for **espMoto** (M5Stack StopWatc
 - **Background GPS Navigation:** Runs a foreground service (`OsmNavigationService`) with wake lock, off-route re-routing, and continuous BLE packet streaming even with the screen off.
 - **QR Code BLE Pairing:** Scans the `espmoto://pair?mac=...&token=...` QR code on the StopWatch using CameraX + ML Kit and authenticates over BLE GATT.
 - **Customizable OBD-II / ELM327 Configurator:** Includes presets (Euro 4/5+ Generic, Honda/Yamaha Euro 5+, Harley J1850 VPW & HDLAN CAN, or Custom), ELM327 BLE name filtering, tachometer max/redline RPM, display slot layout, and a custom PID hex/formula editor synced over BLE.
-- **Web Simulator Mirroring (Optional):** HTTP mirror toggle for testing navigation and OBD configurations against the espMoto LVGL Web Simulator.
-
-## Configuration (`.env`)
-By default, the optional Web Simulator HTTP mirror targets `localhost:8152`. To point to another host or port on your local network without modifying source code:
-
-```bash
-cp .env.example .env
-# Edit SIMULATOR_HOST and SIMULATOR_PORT in .env
-```
-
-`app/build.gradle.kts` reads `.env` at build time and injects `BuildConfig.SIMULATOR_HOST`.
+- **Helmet Sound Warnings & Developer Mode:** Optional Bluetooth helmet audio alerts with music ducking, plus a hidden Developer Mode (tap the version footer 7 times in **Preferences**) to enable offline GPS simulation and manual step controls.
 
 ## Building
 1. Ensure Android SDK 35 and JDK 17 are installed (`local.properties` should point `sdk.dir` to your local Android SDK).

@@ -71,7 +71,6 @@ private val StatusAmber = Color(0xFFFFB300)
 fun ObdConfigScreen(
     profile: BikeProfile,
     bleConnected: Boolean,
-    simMirrorEnabled: Boolean,
     onProfileChange: (BikeProfile) -> Unit
 ) {
     val context = LocalContext.current
@@ -130,11 +129,10 @@ fun ObdConfigScreen(
                             onClick = {
                                 ObdConfigStore.save(context, profile)
                                 val sentBle = EspMotoBleClient.sendObdConfig(profile)
-                                syncStatus = when {
-                                    sentBle && simMirrorEnabled -> "Synced to ESP32 & Simulator"
-                                    sentBle -> "Synced to ESP32"
-                                    simMirrorEnabled -> "Saved & Mirrored to Simulator"
-                                    else -> "Saved (connect ESP32 to sync)"
+                                syncStatus = if (sentBle) {
+                                    "Synced to ESP32"
+                                } else {
+                                    "Saved (connect ESP32 to sync)"
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = EspMotoOrange),

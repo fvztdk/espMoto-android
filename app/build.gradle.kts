@@ -1,18 +1,8 @@
-import java.util.Properties
-
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-
-val dotEnv = Properties().apply {
-    val candidates = listOf(rootProject.file(".env"), rootProject.file("../.env"))
-    val envFile = candidates.firstOrNull { it.isFile }
-    envFile?.inputStream()?.use { load(it) }
-}
-val simHost = (dotEnv.getProperty("SIMULATOR_HOST") ?: "localhost").trim()
-val simPort = (dotEnv.getProperty("SIMULATOR_PORT") ?: "8152").trim()
 
 android {
     namespace = "com.espmoto.nav"
@@ -24,7 +14,6 @@ android {
         targetSdk = 35
         versionCode = 2
         versionName = "0.2.0"
-        buildConfigField("String", "SIMULATOR_HOST", "\"$simHost:$simPort\"")
     }
 
     buildTypes {
