@@ -12,6 +12,7 @@ object BleProtocol {
     val NAV_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a8")
     val OBD_CONFIG_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26a9")
     val PAIR_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26aa")
+    val SIM_OBD_CHAR_UUID: UUID = UUID.fromString("beb5483e-36e1-4688-b7f5-ea07361b26ab")
 }
 
 enum class ManeuverType(val id: Int, val label: String, val symbol: String) {
@@ -45,6 +46,22 @@ data class NavPacket(
     }
 
     fun encode(): ByteArray = encodeString().toByteArray(Charsets.UTF_8)
+}
+
+data class SimObdPacket(
+    val active: Boolean,
+    val rpm: Int = 0,
+    val speedKmh: Int = 0,
+    val gear: Int = 0,
+    val engineTempC: Int = 0,
+    val batteryVolts: Float = 0f,
+    val throttlePct: Int = 0
+) {
+    fun encode(): ByteArray {
+        val voltsStr = String.format(Locale.US, "%.1f", batteryVolts)
+        return "${if (active) 1 else 0}|$rpm|$speedKmh|$gear|$engineTempC|$voltsStr|$throttlePct"
+            .toByteArray(Charsets.UTF_8)
+    }
 }
 
 object NavFormatter {

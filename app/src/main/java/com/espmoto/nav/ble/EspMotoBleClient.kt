@@ -55,6 +55,7 @@ object EspMotoBleClient {
     private var navChar: BluetoothGattCharacteristic? = null
     private var obdConfigChar: BluetoothGattCharacteristic? = null
     private var pairChar: BluetoothGattCharacteristic? = null
+    private var simObdChar: BluetoothGattCharacteristic? = null
     private var negotiatedMtu: Int = 23
     private var adapter: BluetoothAdapter? = null
     private var activeScanner: BluetoothLeScanner? = null
@@ -156,6 +157,7 @@ object EspMotoBleClient {
         navChar = null
         obdConfigChar = null
         pairChar = null
+        simObdChar = null
         negotiatedMtu = 23
 
         val paired = _pairedDevice.value
@@ -272,18 +274,18 @@ object EspMotoBleClient {
         navChar = null
         obdConfigChar = null
         pairChar = null
+        simObdChar = null
         negotiatedMtu = 23
         _state.value = ConnectionState.DISCONNECTED
         _statusMessage.value = "Disconnected from ${BleProtocol.DEVICE_NAME}"
     }
 
     @SuppressLint("MissingPermission")
-    fun sendNavPacket(packet: NavPacket) {
-        _lastPacket.value = packet
-
-        val currentGatt = gatt ?: return
-        val char = navChar ?: return
-        val bytes = packet.encode()
+    private fun writeCharacteristicNoResponse(
+        currentGatt: BluetoothGatt,
+        char: BluetoothGattCharacteristic,
+        bytes: ByteArray
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             currentGatt.writeCharacteristic(
                 char,
@@ -298,6 +300,22 @@ object EspMotoBleClient {
             @Suppress("DEPRECATION")
             currentGatt.writeCharacteristic(char)
         }
+    }
+
+    @SuppressLint("MissingPermission")
+    fun sendNavPacket(packet: NavPacket) {
+        _lastPacket.value = packet
+
+        val currentGatt = gatt ?: return
+        val char = navChar ?: return
+        writeCharacteristicNoResponse(currentGatt, char, packet.encode())
+    }
+
+    @SuppressLint("MissingPermission")
+    fun sendSimObdPacket(packet: SimObdPacket) {
+        val currentGatt = gatt ?: return
+        val char = simObdChar ?: return
+        writeCharacteristicNoResponse(currentGatt, char, packet.encode())
     }
 
     @SuppressLint("MissingPermission")
@@ -356,6 +374,7 @@ object EspMotoBleClient {
                 navChar = null
                 obdConfigChar = null
                 pairChar = null
+                simObdChar = null
                 negotiatedMtu = 23
 
                 if (wasConnected && !userRequestedDisconnect) {
@@ -408,10 +427,12 @@ object EspMotoBleClient {
             val discoveredChar = service?.getCharacteristic(BleProtocol.NAV_CHAR_UUID)
             val discoveredCfgChar = service?.getCharacteristic(BleProtocol.OBD_CONFIG_CHAR_UUID)
             val discoveredPairChar = service?.getCharacteristic(BleProtocol.PAIR_CHAR_UUID)
+            val discoveredSimObdChar = service?.getCharacteristic(BleProtocol.SIM_OBD_CHAR_UUID)
             if (discoveredChar != null) {
                 navChar = discoveredChar
                 obdConfigChar = discoveredCfgChar
                 pairChar = discoveredPairChar
+                simObdChar = discoveredSimObdChar
 
                 if (discoveredPairChar != null) {
                     val paired = _pairedDevice.value ?: appContext?.let { PairingStore.load(it) }

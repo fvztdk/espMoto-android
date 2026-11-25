@@ -26,6 +26,7 @@ import com.espmoto.nav.ble.EspMotoBleClient
 import com.espmoto.nav.ble.ManeuverType
 import com.espmoto.nav.ble.NavFormatter
 import com.espmoto.nav.ble.NavPacket
+import com.espmoto.nav.ble.SimObdPacket
 import com.espmoto.nav.osm.GeoCoord
 import com.espmoto.nav.osm.NominatimPlace
 import com.espmoto.nav.osm.OsmApiClient
@@ -246,6 +247,7 @@ object NavigationController {
         }
 
         simJob = scope.launch {
+            var simTick = 0
             val totalSegments = route.segmentCount()
             for (segIdx in 0 until totalSegments) {
                 if (!isActive) break
@@ -289,6 +291,9 @@ object NavigationController {
                         speedMps = effectiveSpeedMps(currentSeg)
                     )
                     EspMotoBleClient.sendNavPacket(packet)
+                    EspMotoBleClient.sendSimObdPacket(
+                        buildSimulatedObdPacket(currentSeg, remainingSegDist, segDist, simTick++)
+                    )
                     appContextRef?.let { OsmNavigationService.updateNotification(it, packet) }
                     delay(1500L)
                 }
@@ -309,6 +314,19 @@ object NavigationController {
                     isSimulating = false
                 )
                 EspMotoBleClient.sendNavPacket(arrivedPacket)
+                EspMotoBleClient.sendSimObdPacket(
+                    SimObdPacket(
+                        active = true,
+                        rpm = 1200,
+                        speedKmh = 0,
+                        gear = 0,
+                        engineTempC = 92,
+                        batteryVolts = 13.8f,
+                        throttlePct = 0
+                    )
+                )
+                delay(1500L)
+                EspMotoBleClient.sendSimObdPacket(SimObdPacket(active = false))
                 stopForegroundService(appContextRef)
             }
         }
@@ -531,11 +549,63 @@ object NavigationController {
         return GeoCoord(lat, lon)
     }
 
+    private fun buildSimulatedObdPacket(
+        segment: RouteStep?,
+        remainingSegDist: Double,
+        segDist: Double,
+        tick: Int
+    ): SimObdPacket {
+        val baseKmh = (effectiveSpeedMps(segment) * 3.6).coerceIn(18.0, 120.0)
+        // Decelerate smoothly when approaching a turn
+        val speedFactor = when {
+            remainingSegDist <= 25.0 -> 0.45
+            remainingSegDist <= 55.0 && segDist > 70.0 -> 0.72
+            else -> 1.0
+        }
+        val speedKmh = (baseKmh * speedFactor).toInt().coerceIn(0, 140)
+        val gear = when {
+            speedKmh == 0 -> 0
+            speedKmh <= 24 -> 1
+            speedKmh <= 44 -> 2
+            speedKmh <= 68 -> 3
+            speedKmh <= 94 -> 4
+            else -> 5
+        }
+        val gearMaxSpeed = when (gear) {
+            1 -> 28.0
+            2 -> 50.0
+            3 -> 76.0
+            4 -> 104.0
+            else -> 140.0
+        }
+        val rpm = if (gear == 0) {
+            1180 + (tick % 3) * 20
+        } else {
+            val loadRatio = (speedKmh / gearMaxSpeed).coerceIn(0.35, 0.95)
+            (1800 + (loadRatio * 3700).toInt() + (tick % 4) * 45).coerceIn(1400, 6200)
+        }
+        val tempC = 89 + (tick.coerceAtMost(12) / 3) // 89..93 °C
+        val throttlePct = if (speedFactor < 0.8) 8 else (18 + (speedKmh / 4)).coerceIn(12, 65)
+        return SimObdPacket(
+            active = true,
+            rpm = rpm,
+            speedKmh = speedKmh,
+            gear = gear,
+            engineTempC = tempC,
+            batteryVolts = 14.1f,
+            throttlePct = throttlePct
+        )
+    }
+
     private fun stopSimulationOnly() {
+        val wasSimulating = simJob != null || _uiState.value.isSimulating
         simJob?.cancel()
         simJob = null
         if (_uiState.value.isSimulating) {
             _uiState.value = _uiState.value.copy(isSimulating = false)
+        }
+        if (wasSimulating) {
+            EspMotoBleClient.sendSimObdPacket(SimObdPacket(active = false))
         }
     }
 
