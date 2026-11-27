@@ -45,8 +45,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -76,6 +74,7 @@ import com.espmoto.nav.ble.ManeuverType
 import com.espmoto.nav.ble.NavFormatter
 import com.espmoto.nav.ble.PairedDevice
 import com.espmoto.nav.obd.ObdConfigStore
+import com.espmoto.nav.service.DeveloperPrefs
 import com.espmoto.nav.service.HelmetAudioAlerts
 import com.espmoto.nav.service.NavigationController
 import com.espmoto.nav.ui.ObdConfigScreen
@@ -153,12 +152,12 @@ private fun EspMotoNavScreen() {
 
     val connState by EspMotoBleClient.state.collectAsState()
     val bleStatusMsg by EspMotoBleClient.statusMessage.collectAsState()
-    val simMirrorEnabled by EspMotoBleClient.simulatorMirrorEnabled.collectAsState()
-    val simHost by EspMotoBleClient.simulatorHost.collectAsState()
     val pairedDevice by EspMotoBleClient.pairedDevice.collectAsState()
     val navState by NavigationController.uiState.collectAsState()
     val obdProfile by ObdConfigStore.profile.collectAsState()
     val soundWarningsEnabled by HelmetAudioAlerts.soundEnabled.collectAsState()
+    val devModeUnlocked by DeveloperPrefs.devModeUnlocked.collectAsState()
+    val gpsSimulationEnabled by DeveloperPrefs.gpsSimulationEnabled.collectAsState()
 
     var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = Nav, 1 = OBD Config, 2 = Preferences
     var addressQuery by rememberSaveable { mutableStateOf("") }
@@ -168,6 +167,7 @@ private fun EspMotoNavScreen() {
     LaunchedEffect(Unit) {
         ObdConfigStore.load(context)
         HelmetAudioAlerts.load(context)
+        DeveloperPrefs.load(context)
         EspMotoBleClient.refreshPairing(context)
     }
 
@@ -247,13 +247,11 @@ private fun EspMotoNavScreen() {
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Section 1: Header, BLE Status & Simulator Mirror
+            // Section 1: Header & BLE Connection Status
             HeaderConnectionCard(
                 connState = connState,
                 bleStatusMsg = bleStatusMsg,
                 pairedDevice = pairedDevice,
-                simMirrorEnabled = simMirrorEnabled,
-                simHost = simHost,
                 onConnectClick = {
                     if (connState == EspMotoBleClient.ConnectionState.CONNECTED ||
                         connState == EspMotoBleClient.ConnectionState.SCANNING ||
@@ -274,9 +272,6 @@ private fun EspMotoNavScreen() {
                 },
                 onScanQrClick = {
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                },
-                onToggleSimMirror = { enabled ->
-                    EspMotoBleClient.setSimulatorMirrorEnabled(enabled)
                 }
             )
 
@@ -360,17 +355,34 @@ private fun EspMotoNavScreen() {
                 ObdConfigScreen(
                     profile = obdProfile,
                     bleConnected = connState == EspMotoBleClient.ConnectionState.CONNECTED,
-                    simMirrorEnabled = simMirrorEnabled,
                     onProfileChange = { /* StateFlow updated in ObdConfigStore */ }
                 )
             } else if (selectedTab == 2) {
                 PreferencesScreen(
                     soundWarningsEnabled = soundWarningsEnabled,
+                    devModeUnlocked = devModeUnlocked,
+                    gpsSimulationEnabled = gpsSimulationEnabled,
+                    appVersion = BuildConfig.VERSION_NAME,
                     onToggleSoundWarnings = { enabled ->
                         HelmetAudioAlerts.setEnabled(context, enabled, playPreview = enabled)
                     },
                     onTestSound = {
                         HelmetAudioAlerts.playTestSound(context)
+                    },
+                    onUnlockDeveloperMode = {
+                        DeveloperPrefs.unlockDeveloperMode(context)
+                    },
+                    onToggleGpsSimulation = { enabled ->
+                        DeveloperPrefs.setGpsSimulationEnabled(context, enabled)
+                        if (!enabled && navState.isSimulating) {
+                            NavigationController.stopNavigation(context)
+                        }
+                    },
+                    onHideDeveloperMode = {
+                        if (navState.isSimulating) {
+                            NavigationController.stopNavigation(context)
+                        }
+                        DeveloperPrefs.disableDeveloperMode(context)
                     }
                 )
             } else {
@@ -511,6 +523,7 @@ private fun EspMotoNavScreen() {
             // Section 4: Turn-by-Turn Controller & ESP32 Live Preview Card
             TurnByTurnCard(
                 navState = navState,
+                showDevControls = (devModeUnlocked && gpsSimulationEnabled) || navState.isSimulating,
                 onStartGpsNav = {
                     showPlacesList = false
                     if (NavigationController.hasLocationPermission(context)) {
@@ -549,11 +562,8 @@ private fun HeaderConnectionCard(
     connState: EspMotoBleClient.ConnectionState,
     bleStatusMsg: String,
     pairedDevice: PairedDevice?,
-    simMirrorEnabled: Boolean,
-    simHost: String,
     onConnectClick: () -> Unit,
-    onScanQrClick: () -> Unit,
-    onToggleSimMirror: (Boolean) -> Unit
+    onScanQrClick: () -> Unit
 ) {
     val badgeColor = when (connState) {
         EspMotoBleClient.ConnectionState.CONNECTED -> StatusGreen
@@ -651,27 +661,6 @@ private fun HeaderConnectionCard(
                     Text(text = buttonLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Mirror to Web Sim ($simHost)",
-                    color = TextMuted,
-                    fontSize = 12.sp
-                )
-                Switch(
-                    checked = simMirrorEnabled,
-                    onCheckedChange = onToggleSimMirror,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = EspMotoOrange,
-                        uncheckedTrackColor = SurfaceBorder
-                    )
-                )
-            }
         }
     }
 }
@@ -740,6 +729,7 @@ private fun AddressSearchBar(
 @Composable
 private fun TurnByTurnCard(
     navState: com.espmoto.nav.service.NavUiState,
+    showDevControls: Boolean,
     onStartGpsNav: () -> Unit,
     onSimulate: () -> Unit,
     onPrevStep: () -> Unit,
@@ -826,101 +816,146 @@ private fun TurnByTurnCard(
                 }
             }
 
-            // Primary action buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (navState.isNavigating) {
-                    OutlinedButton(
-                        onClick = onPause,
-                        border = BorderStroke(1.dp, EspMotoOrange),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text("Pause GPS", color = EspMotoOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            if (showDevControls) {
+                // Developer debug action buttons (Simulate + manual step navigation)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (navState.isNavigating) {
+                        OutlinedButton(
+                            onClick = onPause,
+                            border = BorderStroke(1.dp, EspMotoOrange),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Pause GPS", color = EspMotoOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Button(
+                            onClick = onStartGpsNav,
+                            enabled = route != null,
+                            colors = ButtonDefaults.buttonColors(containerColor = EspMotoOrange),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Start GPS Nav", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                } else {
-                    Button(
-                        onClick = onStartGpsNav,
-                        enabled = route != null,
-                        colors = ButtonDefaults.buttonColors(containerColor = EspMotoOrange),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text("Start GPS Nav", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+
+                    if (navState.isSimulating) {
+                        OutlinedButton(
+                            onClick = onPause,
+                            border = BorderStroke(1.dp, EspMotoOrange),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Pause Sim", color = EspMotoOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = onSimulate,
+                            enabled = route != null,
+                            border = BorderStroke(1.dp, SurfaceBorder),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Simulate", color = Color.White, fontSize = 13.sp)
+                        }
                     }
                 }
 
-                if (navState.isSimulating) {
+                // Step navigation & Cancel Route row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     OutlinedButton(
-                        onClick = onPause,
-                        border = BorderStroke(1.dp, EspMotoOrange),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(40.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp)
-                    ) {
-                        Text("Pause Sim", color = EspMotoOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    OutlinedButton(
-                        onClick = onSimulate,
-                        enabled = route != null,
+                        onClick = onPrevStep,
+                        enabled = route != null && navState.activeStepIndex > 0,
                         border = BorderStroke(1.dp, SurfaceBorder),
                         modifier = Modifier
                             .weight(1f)
+                            .height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text("◀ Prev", color = TextSilver, fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = onNextStep,
+                        enabled = route != null && totalSteps > 0 && navState.activeStepIndex < totalSteps - 1,
+                        border = BorderStroke(1.dp, SurfaceBorder),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text("Next ▶", color = TextSilver, fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = onCancelRoute,
+                        enabled = route != null || navState.isNavigating || navState.isSimulating || packet?.active == true,
+                        border = BorderStroke(1.dp, StatusRed.copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .height(36.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text("Cancel Route", color = StatusRed, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            } else {
+                // Production riding controls: Start/Pause GPS Nav + Cancel Route
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (navState.isNavigating) {
+                        OutlinedButton(
+                            onClick = onPause,
+                            border = BorderStroke(1.dp, EspMotoOrange),
+                            modifier = Modifier
+                                .weight(1.4f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Pause GPS", color = EspMotoOrange, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else {
+                        Button(
+                            onClick = onStartGpsNav,
+                            enabled = route != null,
+                            colors = ButtonDefaults.buttonColors(containerColor = EspMotoOrange),
+                            modifier = Modifier
+                                .weight(1.4f)
+                                .height(40.dp),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text("Start GPS Nav", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onCancelRoute,
+                        enabled = route != null || navState.isNavigating || packet?.active == true,
+                        border = BorderStroke(1.dp, StatusRed.copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .weight(1f)
                             .height(40.dp),
                         contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
-                        Text("Simulate", color = Color.White, fontSize = 13.sp)
+                        Text("Cancel Route", color = StatusRed, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
-                }
-            }
-
-            // Step navigation & Cancel Route row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onPrevStep,
-                    enabled = route != null && navState.activeStepIndex > 0,
-                    border = BorderStroke(1.dp, SurfaceBorder),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(36.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) {
-                    Text("◀ Prev", color = TextSilver, fontSize = 12.sp)
-                }
-
-                OutlinedButton(
-                    onClick = onNextStep,
-                    enabled = route != null && totalSteps > 0 && navState.activeStepIndex < totalSteps - 1,
-                    border = BorderStroke(1.dp, SurfaceBorder),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(36.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) {
-                    Text("Next ▶", color = TextSilver, fontSize = 12.sp)
-                }
-
-                OutlinedButton(
-                    onClick = onCancelRoute,
-                    enabled = route != null || navState.isNavigating || navState.isSimulating || packet?.active == true,
-                    border = BorderStroke(1.dp, StatusRed.copy(alpha = 0.7f)),
-                    modifier = Modifier
-                        .weight(1.2f)
-                        .height(36.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp)
-                ) {
-                    Text("Cancel Route", color = StatusRed, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
