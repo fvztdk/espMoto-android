@@ -15,6 +15,7 @@ object PairingStore {
     private const val KEY_MAC = "paired_mac"
     private const val KEY_TOKEN = "paired_token"
     private const val KEY_NAME = "paired_name"
+    private const val KEY_AUTO_RECONNECT = "auto_reconnect_enabled"
 
     fun load(context: Context): PairedDevice? {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -35,10 +36,24 @@ object PairingStore {
             .apply()
     }
 
+    fun loadAutoReconnect(context: Context): Boolean {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getBoolean(KEY_AUTO_RECONNECT, true)
+    }
+
+    fun saveAutoReconnect(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_AUTO_RECONNECT, enabled)
+            .apply()
+    }
+
     fun clear(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
-            .clear()
+            .remove(KEY_MAC)
+            .remove(KEY_TOKEN)
+            .remove(KEY_NAME)
             .apply()
     }
 
