@@ -16,9 +16,9 @@ Kotlin + Jetpack Compose companion application for **espMoto** (M5Stack StopWatc
 - **OpenStreetMap Search & Routing:** Geocodes destination addresses via public Nominatim, computes driving routes via OSRM, and previews routes on interactive `osmdroid` map tiles.
 - **Share Intent Integration:** Accepts `geo:` URIs and shared Google Maps / location links directly from other apps (`ACTION_SEND`, `ACTION_VIEW`).
 - **Background GPS Navigation:** Runs a foreground service (`OsmNavigationService`) with wake lock, off-route re-routing, and continuous BLE packet streaming even with the screen off.
-- **QR Code BLE Pairing:** Scans the `espmoto://pair?mac=...&token=...` QR code on the StopWatch using CameraX + ML Kit and authenticates over BLE GATT.
+- **ESP32 Pairing & Auto-Reconnect:** Managed under **Configuration → ESP32 Pairing & Connection** (also reachable via the slim top BLE status bar). Scans the `espmoto://pair?mac=...&token=...` QR code on the StopWatch using CameraX + ML Kit, authenticates over BLE GATT, and supports **Auto-Reconnect When in Range** (enabled by default).
 - **Customizable OBD-II / ELM327 Configurator:** Includes presets (Euro 4/5+ Generic, Honda/Yamaha Euro 5+, Harley J1850 VPW & HDLAN CAN, or Custom), ELM327 BLE name filtering, tachometer max/redline RPM, display slot layout, and a custom PID hex/formula editor synced over BLE.
-- **Helmet Sound Warnings & Developer Mode:** Optional Bluetooth helmet audio alerts with music ducking, plus a hidden Developer Mode (tap the version footer 7 times in **Preferences**) to enable offline GPS simulation and manual step controls.
+- **Helmet Sound Warnings & Developer Mode:** Optional Bluetooth helmet audio alerts with music ducking, plus a hidden Developer Mode (tap the version footer 7 times in **Configuration**) to enable offline GPS simulation and manual step controls.
 
 ## Building
 1. Ensure Android SDK 35 and JDK 17 are installed (`local.properties` should point `sdk.dir` to your local Android SDK).

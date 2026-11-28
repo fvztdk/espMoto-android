@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,14 +22,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -77,9 +76,10 @@ import com.espmoto.nav.obd.ObdConfigStore
 import com.espmoto.nav.service.DeveloperPrefs
 import com.espmoto.nav.service.HelmetAudioAlerts
 import com.espmoto.nav.service.NavigationController
+import com.espmoto.nav.ui.ConfigSubScreen
+import com.espmoto.nav.ui.ConfigurationScreen
 import com.espmoto.nav.ui.ObdConfigScreen
 import com.espmoto.nav.ui.OsmMapView
-import com.espmoto.nav.ui.PreferencesScreen
 import com.espmoto.nav.ui.QrScannerDialog
 
 private val BgDark = Color(0xFF0D0F14)
@@ -111,7 +111,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme(colorScheme = EspMotoColorScheme) {
-                EspMotoNavScreen()
+                EspMotoNavScreen(isFreshLaunch = savedInstanceState == null)
             }
         }
     }
@@ -144,7 +144,7 @@ class MainActivity : ComponentActivity() {
 
 @SuppressLint("BatteryLife")
 @Composable
-private fun EspMotoNavScreen() {
+private fun EspMotoNavScreen(isFreshLaunch: Boolean) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -153,13 +153,15 @@ private fun EspMotoNavScreen() {
     val connState by EspMotoBleClient.state.collectAsState()
     val bleStatusMsg by EspMotoBleClient.statusMessage.collectAsState()
     val pairedDevice by EspMotoBleClient.pairedDevice.collectAsState()
+    val autoReconnectEnabled by EspMotoBleClient.autoReconnectEnabled.collectAsState()
     val navState by NavigationController.uiState.collectAsState()
     val obdProfile by ObdConfigStore.profile.collectAsState()
     val soundWarningsEnabled by HelmetAudioAlerts.soundEnabled.collectAsState()
     val devModeUnlocked by DeveloperPrefs.devModeUnlocked.collectAsState()
     val gpsSimulationEnabled by DeveloperPrefs.gpsSimulationEnabled.collectAsState()
 
-    var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = Nav, 1 = OBD Config, 2 = Preferences
+    var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = Nav, 1 = OBD Config, 2 = Configuration
+    var configSubScreen by rememberSaveable { mutableStateOf(ConfigSubScreen.ROOT) }
     var addressQuery by rememberSaveable { mutableStateOf("") }
     var showPlacesList by rememberSaveable { mutableStateOf(false) }
     var showQrScanner by rememberSaveable { mutableStateOf(false) }
@@ -168,7 +170,7 @@ private fun EspMotoNavScreen() {
         ObdConfigStore.load(context)
         HelmetAudioAlerts.load(context)
         DeveloperPrefs.load(context)
-        EspMotoBleClient.refreshPairing(context)
+        EspMotoBleClient.onAppForegrounded(context, isFreshLaunch = isFreshLaunch)
     }
 
     LaunchedEffect(navState.route) {
@@ -187,10 +189,15 @@ private fun EspMotoNavScreen() {
             if (event == Lifecycle.Event.ON_RESUME) {
                 isIgnoringBatteryOpt =
                     powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+                EspMotoBleClient.ensureAutoConnectIfEligible(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    BackHandler(enabled = selectedTab == 2 && configSubScreen != ConfigSubScreen.ROOT) {
+        configSubScreen = ConfigSubScreen.ROOT
     }
 
     val blePermissionLauncher = rememberLauncherForActivityResult(
@@ -199,6 +206,30 @@ private fun EspMotoNavScreen() {
         if (granted.values.all { it }) {
             EspMotoBleClient.connect(context)
         }
+    }
+
+    fun requestBlePermissionsAndConnect() {
+        if (EspMotoBleClient.hasBlePermissions(context)) {
+            EspMotoBleClient.connect(context)
+        } else {
+            val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                )
+            } else {
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            blePermissionLauncher.launch(perms)
+        }
+    }
+
+    fun requestBatteryOptimization() {
+        val intent = Intent(
+            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+            Uri.parse("package:${context.packageName}")
+        )
+        context.startActivity(intent)
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -247,31 +278,13 @@ private fun EspMotoNavScreen() {
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Section 1: Header & BLE Connection Status
-            HeaderConnectionCard(
+            // Section 1: Slim Header & BLE Status Pill
+            HeaderStatusBar(
                 connState = connState,
-                bleStatusMsg = bleStatusMsg,
                 pairedDevice = pairedDevice,
-                onConnectClick = {
-                    if (connState == EspMotoBleClient.ConnectionState.CONNECTED ||
-                        connState == EspMotoBleClient.ConnectionState.SCANNING ||
-                        connState == EspMotoBleClient.ConnectionState.CONNECTING
-                    ) {
-                        EspMotoBleClient.disconnect()
-                    } else {
-                        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            arrayOf(
-                                Manifest.permission.BLUETOOTH_SCAN,
-                                Manifest.permission.BLUETOOTH_CONNECT
-                            )
-                        } else {
-                            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-                        }
-                        blePermissionLauncher.launch(perms)
-                    }
-                },
-                onScanQrClick = {
-                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                onStatusClick = {
+                    selectedTab = 2
+                    configSubScreen = ConfigSubScreen.ESP32_CONNECTION
                 }
             )
 
@@ -296,20 +309,14 @@ private fun EspMotoNavScreen() {
                 )
             }
 
-            if (!isIgnoringBatteryOpt) {
+            if (!isIgnoringBatteryOpt && !(selectedTab == 2 && configSubScreen == ConfigSubScreen.ESP32_CONNECTION)) {
                 Surface(
                     shape = RoundedCornerShape(10.dp),
                     color = SurfaceDark,
                     border = BorderStroke(1.dp, StatusAmber.copy(alpha = 0.7f)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            val intent = Intent(
-                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                            context.startActivity(intent)
-                        }
+                        .clickable { requestBatteryOptimization() }
                 ) {
                     Text(
                         text = "Allow unrestricted background battery (keeps screen-off updates running)",
@@ -321,12 +328,12 @@ private fun EspMotoNavScreen() {
                 }
             }
 
-            // Mode Switcher Tabs: Navigation vs OBD Config vs Preferences
+            // Mode Switcher Tabs: Navigation vs OBD Config vs Configuration
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf("Navigation", "OBD Config", "Preferences").forEachIndexed { idx, title ->
+                listOf("Navigation", "OBD Config", "Configuration").forEachIndexed { idx, title ->
                     val active = selectedTab == idx
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -334,7 +341,12 @@ private fun EspMotoNavScreen() {
                         border = BorderStroke(1.dp, if (active) EspMotoOrange else SurfaceBorder),
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { selectedTab = idx }
+                            .clickable {
+                                if (idx == 2) {
+                                    configSubScreen = ConfigSubScreen.ROOT
+                                }
+                                selectedTab = idx
+                            }
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
@@ -358,11 +370,29 @@ private fun EspMotoNavScreen() {
                     onProfileChange = { /* StateFlow updated in ObdConfigStore */ }
                 )
             } else if (selectedTab == 2) {
-                PreferencesScreen(
+                ConfigurationScreen(
+                    subScreen = configSubScreen,
+                    onOpenSubScreen = { configSubScreen = it },
+                    connState = connState,
+                    bleStatusMsg = bleStatusMsg,
+                    pairedDevice = pairedDevice,
+                    autoReconnectEnabled = autoReconnectEnabled,
+                    isIgnoringBatteryOpt = isIgnoringBatteryOpt,
                     soundWarningsEnabled = soundWarningsEnabled,
                     devModeUnlocked = devModeUnlocked,
                     gpsSimulationEnabled = gpsSimulationEnabled,
                     appVersion = BuildConfig.VERSION_NAME,
+                    onConnectClick = { requestBlePermissionsAndConnect() },
+                    onDisconnectClick = { EspMotoBleClient.disconnect() },
+                    onScanQrClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                    onUnpairClick = { EspMotoBleClient.clearPairing(context) },
+                    onToggleAutoReconnect = { enabled ->
+                        EspMotoBleClient.setAutoReconnectEnabled(context, enabled)
+                        if (enabled && pairedDevice != null && !EspMotoBleClient.hasBlePermissions(context)) {
+                            requestBlePermissionsAndConnect()
+                        }
+                    },
+                    onRequestBatteryOpt = { requestBatteryOptimization() },
                     onToggleSoundWarnings = { enabled ->
                         HelmetAudioAlerts.setEnabled(context, enabled, playPreview = enabled)
                     },
@@ -558,107 +588,86 @@ private fun EspMotoNavScreen() {
 }
 
 @Composable
-private fun HeaderConnectionCard(
+private fun HeaderStatusBar(
     connState: EspMotoBleClient.ConnectionState,
-    bleStatusMsg: String,
     pairedDevice: PairedDevice?,
-    onConnectClick: () -> Unit,
-    onScanQrClick: () -> Unit
+    onStatusClick: () -> Unit
 ) {
     val badgeColor = when (connState) {
         EspMotoBleClient.ConnectionState.CONNECTED -> StatusGreen
         EspMotoBleClient.ConnectionState.SCANNING,
-        EspMotoBleClient.ConnectionState.CONNECTING -> StatusAmber
+        EspMotoBleClient.ConnectionState.CONNECTING,
+        EspMotoBleClient.ConnectionState.WAITING_IN_RANGE -> StatusAmber
         EspMotoBleClient.ConnectionState.DISCONNECTED -> TextMuted
     }
-    val buttonLabel = when (connState) {
-        EspMotoBleClient.ConnectionState.CONNECTED -> "Disconnect"
+    val statusLabel = when (connState) {
+        EspMotoBleClient.ConnectionState.CONNECTED -> "ESP32 Connected"
         EspMotoBleClient.ConnectionState.SCANNING -> "Scanning..."
         EspMotoBleClient.ConnectionState.CONNECTING -> "Connecting..."
-        EspMotoBleClient.ConnectionState.DISCONNECTED -> "Connect ESP32"
+        EspMotoBleClient.ConnectionState.WAITING_IN_RANGE -> "Auto-reconnect"
+        EspMotoBleClient.ConnectionState.DISCONNECTED ->
+            if (pairedDevice == null) "Not paired" else "Disconnected"
+    }
+    val borderColor = when (connState) {
+        EspMotoBleClient.ConnectionState.CONNECTED -> StatusGreen.copy(alpha = 0.55f)
+        EspMotoBleClient.ConnectionState.SCANNING,
+        EspMotoBleClient.ConnectionState.CONNECTING,
+        EspMotoBleClient.ConnectionState.WAITING_IN_RANGE -> StatusAmber.copy(alpha = 0.55f)
+        EspMotoBleClient.ConnectionState.DISCONNECTED -> SurfaceBorder
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(10.dp),
         color = SurfaceDark,
         border = BorderStroke(1.dp, SurfaceBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Text(
+                text = "ESPMOTO",
+                color = EspMotoOrange,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.8.sp
+            )
+
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = BgDark,
+                border = BorderStroke(1.dp, borderColor),
+                modifier = Modifier.clickable(onClick = onStatusClick)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "ESPMOTO • OSM NAV",
-                        color = EspMotoOrange,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(badgeColor)
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(badgeColor)
-                        )
-                        Text(
-                            text = "${connState.name} • $bleStatusMsg",
-                            color = TextSilver,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
                     Text(
-                        text = if (pairedDevice != null) {
-                            "Paired: ${pairedDevice.mac}"
-                        } else {
-                            "Not paired • Scan QR on StopWatch"
-                        },
-                        color = TextMuted,
-                        fontSize = 10.sp,
+                        text = statusLabel,
+                        color = TextSilver,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                OutlinedButton(
-                    onClick = onScanQrClick,
-                    border = BorderStroke(1.dp, EspMotoOrange),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = EspMotoOrange),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.height(34.dp)
-                ) {
-                    Text(text = "Scan QR", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Button(
-                    onClick = onConnectClick,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (connState == EspMotoBleClient.ConnectionState.CONNECTED) {
-                            SurfaceBorder
-                        } else {
-                            EspMotoOrange
-                        }
-                    ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp)
-                ) {
-                    Text(text = buttonLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "›",
+                        color = TextMuted,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
             }
         }
